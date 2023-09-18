@@ -1,3 +1,5 @@
+import logging
+
 import openai
 import os
 from datetime import datetime
@@ -6,31 +8,25 @@ import pynecone as pc
 from pynecone.base import Base
 
 
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s %(name)-16s %(levelname)-8s %(message)s ',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger("helper_bot")
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
 
-def answer_text_using_chatgpt(text) -> str:
-    # 나중에 사용자가 선택한 옵션에 대해 여러 기법을 적용할 수 있도록 구성해보기
-    # # fewshot 예제를 만들고
-    # def build_fewshot(src_lang, trg_lang):
-    #     src_examples = parallel_example[src_lang]
-    #     trg_examples = parallel_example[trg_lang]
-    #
-    #     fewshot_messages = []
-    #
-    #     for src_text, trg_text in zip(src_examples, trg_examples):
-    #         fewshot_messages.append({"role": "user", "content": src_text})
-    #         fewshot_messages.append({"role": "assistant", "content": trg_text})
-    #
-    #     return fewshot_messages
+async def answer_text_using_chatgpt(text) -> str:
+    logger.info("openai api call")
 
     # system instruction 만들기
     system_instruction = f"assistant는 친절한 선생님이다. 학생들이 이해하기 쉽게 다양한 예시를 통해 설명한다."
 
-    messages = [{"role": "system", "content": system_instruction},
-                # *fewshot_messages,
-                {"role": "user", "content": text},
-                ]
+    messages = [
+        {"role": "system", "content": system_instruction},
+        {"role": "user", "content": text},
+    ]
 
     # API 호출
     response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages)
@@ -48,26 +44,26 @@ class Message(Base):
 
 class State(pc.State):
     """The app state."""
-
-    text: str = ""
     messages: list[Message] = []
+    is_loading: bool = False
 
-    @pc.var
-    def output(self) -> str:
-        if not self.text.strip():
-            return "Answers will appear here."
+    async def handle_submit(self, form_data):
+        self.is_loading = True
+        yield
+        question = form_data['question']
 
-        answer = answer_text_using_chatgpt(self.text)
-        return answer
+        response_message = await answer_text_using_chatgpt(question)
 
-    def post(self):
         self.messages = [
             Message(
-                question=self.text,
-                answer=self.output,
+                question=question,
+                answer=response_message,
                 created_at=datetime.now().strftime("%B %d, %Y %I:%M %p"),
             )
         ] + self.messages
+
+        self.is_loading = False
+        yield pc.set_value("question", "")
 
 
 # Define views.
@@ -101,7 +97,7 @@ def text_box(text):
     )
 
 
-def message(message):
+def message_box(message):
     return pc.box(
         pc.vstack(
             text_box(message.question),
@@ -133,56 +129,32 @@ def smallcaps(text, **kwargs):
     )
 
 
-def output():
-    return pc.box(
-        pc.box(
-            smallcaps(
-                "Answer",
-                color="#aeaeaf",
-                background_color="white",
-                padding_x="0.1rem",
-            ),
-            position="absolute",
-            top="-0.5rem",
-        ),
-        pc.text(State.output),
-        padding="1rem",
-        border="1px solid #eaeaef",
-        margin_top="1rem",
-        border_radius="8px",
-        position="relative",
-    )
-
-
 def index():
     """The main view."""
     return pc.container(
         header(),
-        pc.input(
-            placeholder="Text to question",
-            on_blur=State.set_text,
-            margin_top="1rem",
-            border_color="#eaeaef"
+        pc.form(
+            pc.input(
+                id="question",
+                placeholder="Text to question",
+                margin_top="1rem",
+                border_color="#eaeaef",
+            ),
+            pc.button("Ask", type_="submit", margin_top="1rem"),
+            on_submit=State.handle_submit,
         ),
-        # 나중에 사용자가 좋은 답변을 위해 뭔가를 선택할 수 있도록 만들기?
-        # pc.select(
-        #     list(parallel_example.keys()),
-        #     value=State.src_lang,
-        #     placeholder="Select a language",
-        #     on_change=State.set_src_lang,
-        #     margin_top="1rem",
-        # ),
-        # pc.select(
-        #     list(parallel_example.keys()),
-        #     value=State.trg_lang,
-        #     placeholder="Select a language",
-        #     on_change=State.set_trg_lang,
-        #     margin_top="1rem",
-        # ),
-        output(),
-        pc.button("Ask", on_click=State.post, margin_top="1rem"),
+        pc.cond(
+            State.is_loading,
+            pc.spinner(
+                color="lightgreen",
+                thickness=5,
+                speed="1.5s",
+                size="xl",
+                margin_top="1rem",
+            ),
+        ),
         pc.vstack(
-            pc.foreach(State.messages, message),
+            pc.foreach(State.messages, message_box),
             margin_top="2rem",
             spacing="1rem",
             align_items="left"
