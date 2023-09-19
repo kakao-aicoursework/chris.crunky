@@ -1,39 +1,8 @@
-import logging
-
-import openai
-import os
 from datetime import datetime
 
 import pynecone as pc
 from pynecone.base import Base
-
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s %(name)-16s %(levelname)-8s %(message)s ',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger("helper_bot")
-openai.api_key = os.environ["OPENAI_API_KEY"]
-
-
-async def answer_text_using_chatgpt(text) -> str:
-    logger.info("openai api call")
-
-    # system instruction 만들기
-    system_instruction = f"assistant는 친절한 선생님이다. 학생들이 이해하기 쉽게 다양한 예시를 통해 설명한다."
-
-    messages = [
-        {"role": "system", "content": system_instruction},
-        {"role": "user", "content": text},
-    ]
-
-    # API 호출
-    response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages)
-    answer = response['choices'][0]['message']['content']
-
-    # Return
-    return answer
+from .chat_engine import chat
 
 
 class Message(Base):
@@ -52,7 +21,7 @@ class State(pc.State):
         yield
         question = form_data['question']
 
-        response_message = await answer_text_using_chatgpt(question)
+        response_message = await chat(question)
 
         self.messages = [
             Message(
