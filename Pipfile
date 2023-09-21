@@ -15,6 +15,7 @@ pydantic = "==1.10.11"
 bs4 = "==0.0.1"
 tiktoken = "==0.5.1"
 duckduckgo-search = "==3.5.0"
+chromadb = "*"
 
 [dev-packages]
 

@@ -4,3 +4,4 @@ __pycache__/
 .web
 .idea
 .env
+chroma.sqlite3

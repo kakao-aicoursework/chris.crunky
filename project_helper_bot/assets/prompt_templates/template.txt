@@ -1,0 +1,15 @@
+Your job is to read the <message>, analyze it, and answer me. You can use another angle brackets for context.
+
+<message>
+{question}
+</message>
+
+<related_documents>
+{related_documents}
+</related_documents>
+
+<chat_histories>
+{chat_histories}
+</chat_histories>
+
+Answer:

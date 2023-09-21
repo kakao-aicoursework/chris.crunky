@@ -1,10 +1,14 @@
 import logging
+import os.path
 
 from langchain import LLMChain
 from langchain.chat_models import ChatOpenAI
 from langchain.document_loaders import TextLoader
-from langchain.prompts import HumanMessagePromptTemplate, ChatPromptTemplate
-from langchain.schema import SystemMessage
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.memory import FileChatMessageHistory, ConversationBufferMemory
+from langchain.prompts import ChatPromptTemplate
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.vectorstores import Chroma
 
 # 로깅 세팅
 logging.basicConfig(
@@ -14,27 +18,108 @@ logging.basicConfig(
 )
 logger = logging.getLogger("chat_engine")
 
+# vector db 세팅
+PERSIST_DIR = os.path.join(os.getcwd(), 'chroma-persist')
+DOCUMENTS_DIR = os.path.join(os.getcwd(), 'assets/documents')
+
+db = Chroma(
+    persist_directory=PERSIST_DIR,
+    embedding_function=OpenAIEmbeddings(),
+    collection_name='kakao-api-explain',
+)
+retriever = db.as_retriever()
+
+
+def upload_embedding_from_file(file_path):
+    document = TextLoader(file_path).load()
+
+    text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    docs = text_splitter.split_documents(document)
+
+    db.add_documents(
+        documents=docs,
+        embedding_function=OpenAIEmbeddings(),
+        collection_name='kakao-api-explain',
+    )
+    logger.info('db upload success')
+
+
+for dirpath, dirnames, filenames in os.walk(DOCUMENTS_DIR):
+    for filename in filenames:
+        if filename.endswith('.txt'):
+            file_path = os.path.join(dirpath, filename)
+            upload_embedding_from_file(file_path)
+
+
 # llm 세팅
-llm_openai = ChatOpenAI(temperature=0.8)
+def read_prompt_template(file_path: str) -> str:
+    with open(file_path, "r") as f:
+        prompt_template = f.read()
 
-system_message_prompt = SystemMessage(
-    content='assistant는 안내를 위한 챗봇이다. 이해하기 쉬운 언어를 사용하고, 가능하면 step by step 형식으로 안내한다.'
+    return prompt_template
+
+
+llm_openai = ChatOpenAI(temperature=0.8, model="gpt-3.5-turbo")
+PROMPTS_DIR = os.path.join(os.getcwd(), 'assets/prompt_templates')
+template = read_prompt_template(os.path.join(PROMPTS_DIR, 'template.txt'))
+
+chain = LLMChain(
+    llm=llm_openai,
+    prompt=ChatPromptTemplate.from_template(
+        template=template
+    ),
+    verbose=True,
 )
-human_message_prompt = HumanMessagePromptTemplate.from_template(
-    '''
-    질문 : {question}
-    답변 형식 : 문단을 보기 좋게 나눠서 만들어 줘
-    답변 : 
-    '''
-)
-chat_prompt = ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
-
-# TODO: 상대 경로 사용할 수 있도록 수정하기
-TextLoader('/Users/chris/llm-study/kakao-aicoursework/project1/project_helper_bot/data/kakao-sync.txt').load()
-
-chain = LLMChain(llm=llm_openai, prompt=chat_prompt)
 
 
-async def chat(question) -> str:
+def query_db(query: str, use_retriever: bool = False) -> list[str]:
+    if use_retriever:
+        docs = retriever.get_relevant_documents(query)
+    else:
+        docs = db.similarity_search(query)
+
+    str_docs = [doc.page_content for doc in docs]
+    return str_docs
+
+
+HISTORY_DIR = os.path.join(os.getcwd(), "chat-histories")
+
+
+def load_conversation_history(conversation_id: str):
+    return FileChatMessageHistory(os.path.join(HISTORY_DIR, f"{conversation_id}.json"))
+
+
+def log_user_message(history: FileChatMessageHistory, user_message: str):
+    history.add_user_message(user_message)
+
+
+def log_bot_message(history: FileChatMessageHistory, bot_message: str):
+    history.add_ai_message(bot_message)
+
+
+def get_chat_history(conversation_id: str):
+    history = load_conversation_history(conversation_id)
+    memory = ConversationBufferMemory(
+        memory_key="chat_histories",
+        input_key="user_message",
+        chat_memory=history,
+    )
+
+    return memory.buffer
+
+
+async def chat(question, conversation_id: str = 'test') -> str:
     logger.info('new chat')
-    return chain.run(question=question)
+
+    history = load_conversation_history(conversation_id)
+
+    context = dict(question=question)
+    context['related_documents'] = query_db(question)
+    context['chat_histories'] = get_chat_history(conversation_id)
+
+    answer = chain.run(context)
+
+    log_user_message(history, question)
+    log_bot_message(history, answer)
+
+    return answer
