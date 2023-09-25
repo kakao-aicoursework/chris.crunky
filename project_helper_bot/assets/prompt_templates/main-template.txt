@@ -1,0 +1,21 @@
+Your job is to read the <message>, analyze it, and answer me using korean.
+You can use another angle brackets for context.
+But if you don't think they're relevant, just answer about the <message>.
+
+<message>
+{question}
+</message>
+
+<related_documents>
+{related_documents}
+</related_documents>
+
+<search_results>
+{search_results}
+</search_results>
+
+<chat_histories>
+{chat_histories}
+</chat_histories>
+
+Answer:

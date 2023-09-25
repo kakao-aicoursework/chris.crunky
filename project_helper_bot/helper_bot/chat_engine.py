@@ -1,13 +1,14 @@
 import logging
 import os.path
 
-from langchain import LLMChain
+from langchain import LLMChain, GoogleSearchAPIWrapper
 from langchain.chat_models import ChatOpenAI
 from langchain.document_loaders import TextLoader
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.memory import FileChatMessageHistory, ConversationBufferMemory
 from langchain.prompts import ChatPromptTemplate
 from langchain.text_splitter import CharacterTextSplitter
+from langchain.tools import Tool
 from langchain.vectorstores import Chroma
 
 # 로깅 세팅
@@ -28,6 +29,16 @@ db = Chroma(
     collection_name='kakao-api-explain',
 )
 retriever = db.as_retriever()
+
+
+def query_db(query: str, use_retriever: bool = False) -> list[str]:
+    if use_retriever:
+        docs = retriever.get_relevant_documents(query)
+    else:
+        docs = db.similarity_search(query)
+
+    str_docs = [doc.page_content for doc in docs]
+    return str_docs
 
 
 def upload_embedding_from_file(file_path):
@@ -61,27 +72,16 @@ def read_prompt_template(file_path: str) -> str:
 
 llm_openai = ChatOpenAI(temperature=0.8, model="gpt-3.5-turbo")
 PROMPTS_DIR = os.path.join(os.getcwd(), 'assets/prompt_templates')
-template = read_prompt_template(os.path.join(PROMPTS_DIR, 'template.txt'))
 
-chain = LLMChain(
+main_chain = LLMChain(
     llm=llm_openai,
     prompt=ChatPromptTemplate.from_template(
-        template=template
+        template=read_prompt_template(os.path.join(PROMPTS_DIR, 'main-template.txt'))
     ),
     verbose=True,
 )
 
-
-def query_db(query: str, use_retriever: bool = False) -> list[str]:
-    if use_retriever:
-        docs = retriever.get_relevant_documents(query)
-    else:
-        docs = db.similarity_search(query)
-
-    str_docs = [doc.page_content for doc in docs]
-    return str_docs
-
-
+# memory 세팅
 HISTORY_DIR = os.path.join(os.getcwd(), "chat-histories")
 
 
@@ -108,17 +108,46 @@ def get_chat_history(conversation_id: str):
     return memory.buffer
 
 
+# web search llm 세팅
+search = GoogleSearchAPIWrapper(
+    google_api_key=os.getenv("GOOGLE_API_KEY"),
+    google_cse_id=os.getenv("GOOGLE_CSE_ID"),
+)
+
+search_tool = Tool(
+    name="Google Search",
+    description="Search Google for recent results.",
+    func=search.run,
+)
+
+search_value_check_chain = LLMChain(
+    llm=llm_openai,
+    prompt=ChatPromptTemplate.from_template(
+        template=read_prompt_template(os.path.join(PROMPTS_DIR, 'search-value-check-template.txt'))
+    ),
+    verbose=True,
+)
+
+
 async def chat(question, conversation_id: str = 'test') -> str:
     logger.info('new chat')
 
-    history = load_conversation_history(conversation_id)
-
     context = dict(question=question)
+    context['related_web_search_results'] = search_tool.run(question)
+
+    has_value = search_value_check_chain.run(context)
+    if has_value == 'Y':
+        context['search_results'] = context.pop('related_web_search_results')
+    else:
+        context.pop('related_web_search_results')
+        context['search_results'] = ''
+
     context['related_documents'] = query_db(question)
     context['chat_histories'] = get_chat_history(conversation_id)
 
-    answer = chain.run(context)
+    answer = main_chain.run(context)
 
+    history = load_conversation_history(conversation_id)
     log_user_message(history, question)
     log_bot_message(history, answer)
 
