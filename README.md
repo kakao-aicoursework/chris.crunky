@@ -17,4 +17,4 @@ $ pc run
 
 ## project_helper_bot 앱
 
-- 카카오 싱크 api에 대해 설명해주는 앱
+- 카카오 싱크, 채널, 소셜 api에 대해 설명하는 앱
